@@ -37,6 +37,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 import imageCompression from 'browser-image-compression';
 import { toast } from 'react-hot-toast';
 import { supabase } from '../lib/supabaseClient';
+import UsernameModal from '../components/UsernameModal';
 
 const QRCODE_READER_ID = "reader";
 
@@ -52,14 +53,62 @@ export default function Home() {
   const [productName, setProductName] = useState('');
   const [price, setPrice] = useState('');
 
+  // User state
+  const [username, setUsername] = useState<string | null>(null);
+  const [showUsernameModal, setShowUsernameModal] = useState(false);
+  const [isSavingUser, setIsSavingUser] = useState(false);
+
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // === CORE LOGIC ===
 
+  // Effect để kiểm tra người dùng khi component mount
+  useEffect(() => {
+    const checkUser = async () => {
+      const userId = localStorage.getItem('sscan_user_id');
+      if (userId) {
+        // Nếu có user id trong localStorage, lấy thông tin user từ DB
+        setLoadingMessage('Đang tải thông tin người dùng...');
+        setIsLoading(true);
+        try {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('username')
+            .eq('id', userId)
+            .single();
+          
+          if (error || !data) {
+            // Nếu không tìm thấy user trong DB (có thể do DB bị reset),
+            // thì yêu cầu nhập lại.
+            localStorage.removeItem('sscan_user_id');
+            setShowUsernameModal(true);
+            toast.error('Không tìm thấy thông tin người dùng. Vui lòng nhập lại.');
+          } else {
+            setUsername(data.username);
+            toast.success(`Chào mừng trở lại, ${data.username}!`);
+          }
+        } catch (error) {
+          console.error("Error fetching user profile:", error);
+          localStorage.removeItem('sscan_user_id');
+          setShowUsernameModal(true);
+          toast.error('Lỗi khi tải thông tin người dùng.');
+        } finally {
+          setIsLoading(false);
+        }
+      } else {
+        // Nếu không có user id, hiển thị modal yêu cầu nhập tên
+        setShowUsernameModal(true);
+      }
+    };
+
+    checkUser();
+  }, []); // Chạy 1 lần duy nhất
+
   // Effect để khởi tạo scanner khi component được mount
   useEffect(() => {
-    if (document.getElementById(QRCODE_READER_ID) && !scannerRef.current) {
+    // Chỉ khởi tạo scanner khi đã có thông tin user
+    if (!showUsernameModal && document.getElementById(QRCODE_READER_ID) && !scannerRef.current) {
       const html5Qrcode = new Html5Qrcode(QRCODE_READER_ID);
       scannerRef.current = html5Qrcode;
       html5Qrcode.start(
@@ -81,7 +130,7 @@ export default function Home() {
         scannerRef.current.stop().catch(err => console.error("Failed to stop scanner on cleanup", err));
       }
     };
-  }, []);
+  }, [showUsernameModal]); // Thêm showUsernameModal vào dependency array
 
 
   const handleScanSuccess = (decodedText: string) => {
@@ -153,10 +202,43 @@ export default function Home() {
     });
   };
 
+  const handleSaveUsername = async (name: string) => {
+    setIsSavingUser(true);
+    try {
+      // Tạo một user mới trong bảng 'profiles'
+      const { data, error } = await supabase
+        .from('profiles')
+        .insert({ username: name })
+        .select('id, username')
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        // Lưu id của user vào localStorage để nhận diện trong các lần truy cập sau
+        localStorage.setItem('sscan_user_id', data.id);
+        setUsername(data.username);
+        setShowUsernameModal(false);
+        toast.success(`Cảm ơn, ${data.username}! Bạn có thể bắt đầu quét.`);
+      }
+    } catch (error) {
+      console.error("Error saving user:", error);
+      toast.error('Đã có lỗi xảy ra khi lưu tên của bạn.');
+    } finally {
+      setIsSavingUser(false);
+    }
+  };
+
   const handleFormSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!scannedCode || !productName || !price) {
       toast.error("Vui lòng điền đầy đủ thông tin.");
+      return;
+    }
+
+    const userId = localStorage.getItem('sscan_user_id');
+    if (!userId) {
+      toast.error("Không tìm thấy thông tin người dùng. Vui lòng tải lại trang.");
       return;
     }
 
@@ -184,7 +266,8 @@ export default function Home() {
         barcode: scannedCode, 
         name: productName, 
         price: parseFloat(price),
-        image_url: imageUrl
+        image_url: imageUrl,
+        user_id: userId, // Thêm user_id vào đây
       }]);
       if (insertError) throw insertError;
 
@@ -213,9 +296,15 @@ export default function Home() {
     <div className="flex flex-col h-screen w-full max-w-lg mx-auto bg-white font-sans">
       <canvas ref={canvasRef} hidden /> {/* Canvas ẩn để chụp ảnh */}
       
+      {/* Modal nhập tên người dùng */}
+      {showUsernameModal && (
+        <UsernameModal onSave={handleSaveUsername} isLoading={isSavingUser} />
+      )}
+
       {/* Header */}
-      <div className="p-4 flex-shrink-0 border-b border-gray-200">
-        <h1 className="font-bold text-blue-600 text-lg text-center">Sscan - Quét Mã Vạch</h1>
+      <div className="p-4 flex-shrink-0 border-b border-gray-200 flex justify-between items-center">
+        <h1 className="font-bold text-blue-600 text-lg">Sscan - Quét Mã Vạch</h1>
+        {username && <span className="text-sm text-gray-600">Chào, {username}</span>}
       </div>
 
       {/* Lớp phủ Loading */}
@@ -237,7 +326,7 @@ export default function Home() {
       {/* Vùng Form (có thể cuộn) */}
       <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-gray-50">
         <form onSubmit={handleFormSubmit}>
-          <fieldset disabled={isFormDisabled} className="space-y-4 disabled:opacity-50">
+          <fieldset disabled={isFormDisabled || showUsernameModal} className="space-y-4 disabled:opacity-50">
             
             <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
               <p className="text-xs text-gray-600 mb-1">Mã vạch đã quét:</p>
