@@ -1,5 +1,4 @@
 "use client";
-export const dynamic = 'force-dynamic';
 // =======================================================================
 // MỤC ĐÍCH:
 // Phiên bản cập nhật tích hợp chức năng chụp ảnh sản phẩm trực tiếp
